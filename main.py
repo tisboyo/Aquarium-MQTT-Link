@@ -36,7 +36,7 @@ def load_credentials():
     ):
         print("Database credentials are not set in environment variables.")
         print(
-            "Make sure all of the variables are set: db_user, db_password, database, db_host, db_port (optional), mqtt_host, mqtt_port (optional)"
+            "Make sure all of the variables are set: db_user, db_password, database, db_host, db_port (optional), mqtt_host, mqtt_port (optional)"  # noqa: E501
         )
         import sys  # We don't use sys anywhere else, so import it only when we need it, which should be never.
 
@@ -71,6 +71,9 @@ def on_message(mqttc, obj, msg):
         msg.topic, datetime.datetime.utcfromtimestamp(0)
     )
 
+    # Update the watchdog timer
+    last_update["watchdog"] = now
+
     if time_since_update < update_frequency:
         print(
             f"Next database update for {msg.topic} no sooner than",
@@ -82,6 +85,7 @@ def on_message(mqttc, obj, msg):
 
     # Establish database connection and do INSERT
     conn = None
+
     try:
         conn = psycopg2.connect(
             user=env["user"],
@@ -92,12 +96,13 @@ def on_message(mqttc, obj, msg):
         )
 
         cur = conn.cursor()
-
         tank = msg.topic.split("/")[1]
         sensor = msg.topic.split("/")[2]
         value = msg.payload.decode("utf-8")
 
-        query = f"INSERT INTO aquariums (time, tank, sensor, value) VALUES (%s, %s, %s, %s);"
+        query = (
+            "INSERT INTO aquariums (time, tank, sensor, value) VALUES (%s, %s, %s, %s);"
+        )
         query_values = (datetime.datetime.now(), tank, sensor, value)
 
         cur.execute(query, query_values)
@@ -156,7 +161,18 @@ def main():
 
     mqttc.subscribe("aquariums/#", 0)
 
-    mqttc.loop_forever()
+    # mqttc.loop_forever()
+    while True:
+        watchdog_time = datetime.datetime.now() - last_update["watchdog"]
+        # print(f"Watchdog time: {watchdog_time}")
+        if watchdog_time > datetime.timedelta(seconds=30):
+            print("Watchdog timer activated, exiting...")
+
+            from os import _exit
+
+            _exit(1)
+
+        mqttc.loop()
 
 
 # Load credentials from environment variables
@@ -164,6 +180,8 @@ env = load_credentials()
 
 # Used for tracking how long between database updates.
 last_update = dict()
+last_update["watchdog"] = datetime.datetime.now()
+
 update_frequency = datetime.timedelta(minutes=5)
 
 if __name__ == "__main__":
